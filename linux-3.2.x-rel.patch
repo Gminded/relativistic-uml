@@ -1,0 +1,247 @@
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/include/shared/common-offsets.h linux-3.2.62-rel/arch/um/include/shared/common-offsets.h
+--- linux-3.2.62/arch/um/include/shared/common-offsets.h	2014-08-06 19:07:43.000000000 +0200
++++ linux-3.2.62-rel/arch/um/include/shared/common-offsets.h	2014-08-11 20:59:10.554968777 +0200
+@@ -51,3 +51,6 @@ DEFINE(UML_CONFIG_UML_X86, CONFIG_UML_X8
+ #ifdef CONFIG_64BIT
+ DEFINE(UML_CONFIG_64BIT, CONFIG_64BIT);
+ #endif
++#ifdef CONFIG_RELATIVISTIC_TIME
++DEFINE(UML_CONFIG_RELATIVISTIC_TIME, CONFIG_RELATIVISTIC_TIME);
++#endif
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/include/shared/reltime.h linux-3.2.62-rel/arch/um/include/shared/reltime.h
+--- linux-3.2.62/arch/um/include/shared/reltime.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-3.2.62-rel/arch/um/include/shared/reltime.h	2014-08-11 20:59:10.582969189 +0200
+@@ -0,0 +1,14 @@
++#if ! defined(__RELTIME_H__) && \
++	(defined(CONFIG_RELATIVISTIC_TIME) || defined(UML_CONFIG_RELATIVISTIC_TIME))
++#define __RELTIME_H__
++
++struct uml_reltime_t {
++	long long convergence;
++	long double frequency;
++};
++
++extern struct uml_reltime_t reltime;
++
++long double atold(char *line);
++
++#endif
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/Kconfig.um linux-3.2.62-rel/arch/um/Kconfig.um
+--- linux-3.2.62/arch/um/Kconfig.um	2014-08-06 19:07:43.000000000 +0200
++++ linux-3.2.62-rel/arch/um/Kconfig.um	2014-08-11 20:59:10.626969835 +0200
+@@ -156,3 +156,12 @@ config MMAPPER
+ 
+ config NO_DMA
+ 	def_bool y
++
++config RELATIVISTIC_TIME
++	bool "Relative virtual time"
++	default y
++	help
++      When enabled, this option allows UML's time to run at a different
++      speed than real time.
++      This is for time-related kernel and application testing purposes.
++      If unsure say "N".
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/kernel/Makefile linux-3.2.62-rel/arch/um/kernel/Makefile
+--- linux-3.2.62/arch/um/kernel/Makefile	2014-08-06 19:07:43.000000000 +0200
++++ linux-3.2.62-rel/arch/um/kernel/Makefile	2014-08-11 20:59:10.666970423 +0200
+@@ -14,6 +14,7 @@ obj-y = config.o exec.o exitcode.o init_
+ 	signal.o smp.o syscall.o sysrq.o time.o tlb.o trap.o \
+ 	um_arch.o umid.o skas/
+ 
++obj-$(CONFIG_RELATIVISTIC_TIME) += reltime.o
+ obj-$(CONFIG_BLK_DEV_INITRD) += initrd.o
+ obj-$(CONFIG_GPROF)	+= gprof_syms.o
+ obj-$(CONFIG_GCOV)	+= gmon_syms.o
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/kernel/reltime.c linux-3.2.62-rel/arch/um/kernel/reltime.c
+--- linux-3.2.62/arch/um/kernel/reltime.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-3.2.62-rel/arch/um/kernel/reltime.c	2014-09-19 13:56:53.651581435 +0200
+@@ -0,0 +1,118 @@
++#include <linux/proc_fs.h>
++#include <linux/seq_file.h>
++
++struct uml_reltime_t {
++	long long convergence;
++	long double frequency;
++};
++
++struct uml_reltime_t reltime = {
++	.convergence= 0,
++	.frequency= 1
++};
++
++/* Convert ascii to long double. */
++long double atold(char *line) {
++	long double integer = 0;
++	long double decimal = 0;
++	long double sign = 1;
++	int i = 0;
++	long double dec_count = 1;
++	if (line[i] == '-') {
++		sign = -1;
++		i++;
++	}
++	/* Scan and convert integer part */
++	while ('0' <= line[i] && line[i] <= '9') {
++		integer *= 10;
++		integer += line[i] - '0';
++		i++;
++	}
++	/* Scan and convert decimal part */
++	if (line[i] == '.') {
++		i++;
++		while ('0' <= line[i] && line[i] <= '9') {
++			decimal *= 10;
++			decimal += line[i] - '0';
++			i++;
++			dec_count *= 10;
++		}
++	}
++	/* Now put everything together */
++	return sign * (integer + (decimal / dec_count));
++}
++
++#ifdef CONFIG_PROC_FS
++/**** add /proc entries ****/
++static struct proc_dir_entry *uml_reltime = NULL;
++static struct proc_dir_entry *frequency = NULL;
++static struct proc_dir_entry *convergence = NULL;
++
++static int conv_show(struct seq_file *file, void *v) {
++	seq_printf(file, "%lld\n", reltime.convergence);
++	return 0;
++}
++
++static int conv_open(struct inode *inode, struct file *file) {
++	return single_open(file, conv_show, NULL);
++}
++
++static const struct file_operations conv_fops =
++{
++	.open = conv_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release
++};
++
++static int freq_show(struct seq_file *file, void *v) {
++	long long unsigned int_part, dec_part, dec_part_unrounded;
++	long double val = reltime.frequency;
++	char *sign;
++	if (val < 0) {
++		val *= -1;
++		sign = "-";
++	}
++	else
++		sign = "";
++	int_part = (long long unsigned) val;
++	/* We want to print only the first 6 decimal digits, so we take 7 and
++	 *      * round up the last one.  */
++	dec_part_unrounded = (long long unsigned) ((val - int_part) * 10000000);
++	dec_part = dec_part_unrounded / 10;
++	dec_part_unrounded -= dec_part * 10;
++	if (dec_part_unrounded >= 5)
++		dec_part += 1;
++
++	seq_printf(file, "%s%llu.%06llu\n", sign, int_part, dec_part);
++	return 0;
++}
++
++static int freq_open(struct inode *inode, struct file *file) {
++	return single_open(file, freq_show, NULL);
++}
++
++static const struct file_operations freq_fops =
++{
++	.open = freq_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release
++};
++
++/* /proc entries do not need to be removed, because this is a "built-in module" so it's not removed before shutdown */
++static int __init reltime_init (void)
++{
++	uml_reltime = proc_mkdir("uml_reltime", NULL);
++	if (!uml_reltime)
++		return -ENOMEM;
++	convergence = proc_create("convergence", 0644, uml_reltime, &conv_fops);
++	if (!convergence)
++		return -ENOMEM;
++	frequency = proc_create("frequency", 0644, uml_reltime, &freq_fops);
++	  if (!frequency)
++	  return -ENOMEM;
++	return 0;
++}
++__initcall(reltime_init);
++#endif
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/kernel/um_arch.c linux-3.2.62-rel/arch/um/kernel/um_arch.c
+--- linux-3.2.62/arch/um/kernel/um_arch.c	2014-08-06 19:07:43.000000000 +0200
++++ linux-3.2.62-rel/arch/um/kernel/um_arch.c	2014-08-11 20:59:10.670970481 +0200
+@@ -20,6 +20,7 @@
+ #include "kern_util.h"
+ #include "mem_user.h"
+ #include "os.h"
++#include <reltime.h> /*added for setting relativistic time parameters*/
+ 
+ #define DEFAULT_COMMAND_LINE "root=98:0"
+ 
+@@ -198,6 +199,34 @@ __uml_setup("--help", Usage,
+ "    Prints this message.\n\n"
+ );
+ 
++#ifdef CONFIG_RELATIVISTIC_TIME
++/*parameter for initializing the virtual convergence point*/
++static int __init uml_conv_setup(char *line, int *add) {
++	if (!sscanf(line, "%lld", &(reltime.convergence))) {
++		printf("Couldn't parse [%s]\n", line);
++		return -1;
++	}
++
++	return 0;
++}
++
++__uml_setup("timeconv=", uml_conv_setup,
++"timeconv=<timestamp where virtual and real time meet>\n"
++"    This can be used to specify the convergence point of the virtual time as the (non-negative) number of seconds since the Epoch (1 gen 1970). It is the point in time where the virtual time and the real one are the same.\n\n"
++);
++
++/*parameter for initializing the virtual frequency*/
++static int __init uml_freq_setup(char *line, int *add) {
++	reltime.frequency = atold(line);
++	return 0;
++}
++
++__uml_setup("timefreq=", uml_freq_setup,
++"timefreq=<frequency value>\n"
++"    This can be used to specify the frequency of the virtual time as a decimal value.\n\n"
++);
++#endif
++
+ static void __init uml_checksetup(char *line, int *add)
+ {
+ 	struct uml_param *p;
+diff -uprN -x ''\''*~'\''' -x ''\''config*'\''' -x ''\''*.lds'\''' -x ''\''*.so*'\''' -X linux-3.2.62/Documentation/dontdiff linux-3.2.62/arch/um/os-Linux/time.c linux-3.2.62-rel/arch/um/os-Linux/time.c
+--- linux-3.2.62/arch/um/os-Linux/time.c	2014-08-06 19:07:43.000000000 +0200
++++ linux-3.2.62-rel/arch/um/os-Linux/time.c	2014-08-11 20:59:10.718971187 +0200
+@@ -11,6 +11,7 @@
+ #include "kern_util.h"
+ #include "os.h"
+ #include "internal.h"
++#include <reltime.h>
+ 
+ int set_interval(void)
+ {
+@@ -76,7 +77,12 @@ long long os_nsecs(void)
+ 	struct timeval tv;
+ 
+ 	gettimeofday(&tv, NULL);
++#ifdef UML_CONFIG_RELATIVISTIC_TIME
++	return (long long) ((timeval_to_ns(&tv) - reltime.convergence*1000000000) 
++		* reltime.frequency + reltime.convergence*1000000000);
++#else
+ 	return timeval_to_ns(&tv);
++#endif
+ }
+ 
+ #ifdef UML_CONFIG_NO_HZ
